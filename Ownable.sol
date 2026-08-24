@@ -15,11 +15,6 @@ interface External1 {
 
 }
 
-interface External2 {
-  function transferFrom(address from, address to, uint256 tokenId) external;
-  function getApproved(uint256 tokenId) external view returns (address);
-}
-
 contract Ownable {
 
   address public owner;
