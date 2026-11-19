@@ -99,7 +99,7 @@ contract Togethers is Administration {
    */
   function ask(uint _groupID) public
   {
-    require(_groupID <= groupNumber);
+    require(_groupID > 0 && _groupID <= groupNumber, "Unknown group");
     require(mappProfileInGroup[_groupID][msg.sender].isMember == false);
     require(mappProfileInGroup[_groupID][msg.sender].ask == false);
     mappProfileInGroup[_groupID][msg.sender].ask = true;
@@ -139,6 +139,8 @@ contract Togethers is Administration {
    */
   function setUser(string memory _pseudo) public
   {
+    require(bytes(_pseudo).length > 0, "Empty pseudo");
+    require(bytes(mappAddressToUser[msg.sender]).length == 0, "Already registered, use changeUserName");
     uint currentID = returnHash(_pseudo);
     require(checkNameUnicity[currentID] == address(0));
     checkNameUnicity[currentID] = msg.sender;
@@ -151,6 +153,8 @@ contract Togethers is Administration {
    */
   function changeUserName(string memory _pseudo) public
   {
+    require(bytes(_pseudo).length > 0, "Empty pseudo");
+    require(bytes(mappAddressToUser[msg.sender]).length > 0, "Not registered, use setUser");
     uint currentID = returnHash(_pseudo);
     require(checkNameUnicity[currentID] == address(0));
     checkNameUnicity[returnHash(mappAddressToUser[msg.sender])] = address(0);
@@ -239,28 +243,40 @@ contract Togethers is Administration {
    */
   function payForFunds(address _publicKey,  uint groupID, uint _tokenAmount, address _crypto) public payable
   {
+    require(mappProfileInGroup[groupID][msg.sender].isMember == true, "Sender not member");
+    require(mappProfileInGroup[groupID][_publicKey].isMember == true, "Target not member");
+    require(mappProfileInGroup[groupID][_publicKey].open == true, "Box not open");
     uint amount;
+    uint8 category;
     if (msg.value > 0)
     {
+      // ether payment: always category 0, whatever token address is passed
+      require(_crypto == address(0), "Ether payment with token address");
       amount = msg.value;
+      category = 0;
     }
     else
     {
-      require(mappCryptoEnable[_crypto] == true);
+      require(_tokenAmount > 0, "Zero amount");
+      require(mappCryptoEnable[_crypto] == true, "Token disabled");
+      category = mappAllowCryptoForCategory[_crypto];
+      // a token without category would otherwise be credited as ether
+      require(category != 0, "Token without category");
       for(uint i = 0 ; i < homeStableList.length ; i++)
       {
-        require(homeStableList[i] != _crypto);
+        require(homeStableList[i] != _crypto, "Home stablecoin not accepted");
       }
       amount = _tokenAmount;
-      External1(_crypto).transferFrom(msg.sender,address(this),_tokenAmount);
-      if (External1(_crypto).decimals() < max)
+      _safeTransferFrom(_crypto, msg.sender, address(this), _tokenAmount);
+      uint decimals = External1(_crypto).decimals();
+      if (decimals < max)
       {
-        amount = amount * 10**(max - (External1(_crypto).decimals()));
+        amount = amount * 10**(max - decimals);
       }
     }
-    mappProfileStats[groupID][_publicKey][mappAllowCryptoForCategory[_crypto]] += amount;
-    mappPeerToPeerStats[msg.sender][_publicKey][mappAllowCryptoForCategory[_crypto]] += amount;
-    mappIdStats[mappProfileInGroup[groupID][_publicKey].id][msg.sender][mappAllowCryptoForCategory[_crypto]] += amount;
+    mappProfileStats[groupID][_publicKey][category] += amount;
+    mappPeerToPeerStats[msg.sender][_publicKey][category] += amount;
+    mappIdStats[mappProfileInGroup[groupID][_publicKey].id][msg.sender][category] += amount;
   }
 
   /**
@@ -272,23 +288,25 @@ contract Togethers is Administration {
    */
   function withdrawFunds(uint groupID) public
   {
+    require(mappProfileInGroup[groupID][msg.sender].isMember == true, "Not member");
+    require(mappProfileInGroup[groupID][msg.sender].open == true, "No open box");
     mappProfileInGroup[groupID][msg.sender].open = false;
-    for(uint8 i = 0 ; i < homeStableList.length ; i++)
+    uint etherAmount = mappProfileStats[groupID][msg.sender][0];
+    // effects before interactions: balances are reset before any external call (reentrancy)
+    mappProfileStats[groupID][msg.sender][0] = 0;
+    for(uint8 i = 1 ; i < homeStableList.length ; i++)
     {
-    if (mappProfileStats[groupID][msg.sender][i] > 0)
-    {
-      if ( i == 0 )
+      uint value = mappProfileStats[groupID][msg.sender][i];
+      if (value > 0)
       {
-        (bool success, ) = payable(msg.sender).call{value: mappProfileStats[groupID][msg.sender][i]}("");
-        require(success, "Transfer failed");
         mappProfileStats[groupID][msg.sender][i] = 0;
+        require(External1(homeStableList[i]).mintExternal(msg.sender, value), "Mint failed");
       }
-      else
-      {
-        External1(homeStableList[i]).mintExternal(msg.sender,mappProfileStats[groupID][msg.sender][i]);
-      }
-      mappProfileStats[groupID][msg.sender][i] = 0;
     }
+    if (etherAmount > 0)
+    {
+      (bool success, ) = payable(msg.sender).call{value: etherAmount}("");
+      require(success, "Transfer failed");
     }
   }
 
@@ -301,14 +319,37 @@ contract Togethers is Administration {
    * @param _crypto1 the address of the income token
    * @param _crypto2 the address of the outcome token
    */
-  function changeToken(uint _tokenAmount, address _crypto1, address _crypto2) public payable
+  function changeToken(uint _tokenAmount, address _crypto1, address _crypto2) public
   {
-    require(mappCryptoEnable[_crypto1] == true && mappCryptoEnable[_crypto2] == true);
-    require(mappAllowCryptoForCategory[_crypto1] == mappAllowCryptoForCategory[_crypto2]);
-    uint decimals = max - (External1(_crypto1).decimals());
-    External1(_crypto1).transferFrom(msg.sender,address(this),_tokenAmount / 10**(decimals));
-    decimals = max - (External1(_crypto2).decimals());
-    External1(_crypto2).transfer(msg.sender,_tokenAmount / 10**(decimals));
+    require(_tokenAmount > 0, "Zero amount");
+    require(_crypto1 != _crypto2, "Same token");
+    require(mappCryptoEnable[_crypto1] == true && mappCryptoEnable[_crypto2] == true, "Token disabled");
+    uint8 category = mappAllowCryptoForCategory[_crypto1];
+    require(category != 0 && category == mappAllowCryptoForCategory[_crypto2], "Different categories");
+    uint scale1 = 10**(max - External1(_crypto1).decimals());
+    uint scale2 = 10**(max - External1(_crypto2).decimals());
+    // refuse amounts lost by rounding, otherwise dust could be taken for free
+    require(_tokenAmount % scale1 == 0 && _tokenAmount % scale2 == 0, "Amount not representable in both tokens");
+    _safeTransferFrom(_crypto1, msg.sender, address(this), _tokenAmount / scale1);
+    _safeTransfer(_crypto2, msg.sender, _tokenAmount / scale2);
+  }
+
+  /**
+   * @notice transferFrom that also accepts tokens returning no value (USDT style)
+   */
+  function _safeTransferFrom(address _token, address _from, address _to, uint _value) private
+  {
+    (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(External1.transferFrom.selector, _from, _to, _value));
+    require(success && (data.length == 0 || abi.decode(data, (bool))), "transferFrom failed");
+  }
+
+  /**
+   * @notice transfer that also accepts tokens returning no value (USDT style)
+   */
+  function _safeTransfer(address _token, address _to, uint _value) private
+  {
+    (bool success, bytes memory data) = _token.call(abi.encodeWithSelector(External1.transfer.selector, _to, _value));
+    require(success && (data.length == 0 || abi.decode(data, (bool))), "transfer failed");
   }
 
   /**
