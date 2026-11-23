@@ -28,7 +28,7 @@ function compile(sourceCode, contractName) {
   const input = {
     language: 'Solidity',
     sources: { main: { content: sourceCode } },
-    settings: { outputSelection: { '*': { '*': ['abi', 'evm.bytecode'] } } },
+    settings: { optimizer: { enabled: true, runs: 200 }, outputSelection: { '*': { '*': ['abi', 'evm.bytecode'] } } },
   }
   // Parse the compiler output to retrieve the ABI and Bytecode
   const output = JSON.parse(
