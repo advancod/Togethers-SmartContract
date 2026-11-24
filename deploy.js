@@ -12,17 +12,24 @@ async function main() {
     new Web3.providers.HttpProvider(`https://${network}.infura.io/v3/${process.env.INFURA_API_KEY}`)
   )
   // Creating a signing account from a private key
-  const signer = web3.eth.accounts.privateKeyToAccount('0x' + process.env.SIGNER_PRIVATE_KEY)
+  const signer = web3.eth.accounts.privateKeyToAccount(
+    process.env.SIGNER_PRIVATE_KEY.startsWith('0x') ? process.env.SIGNER_PRIVATE_KEY : '0x' + process.env.SIGNER_PRIVATE_KEY
+  )
   web3.eth.accounts.wallet.add(signer)
 
   // Using the signing account to deploy the contract
   const contract = new web3.eth.Contract(abi)
   contract.options.data = bytecode
   const deployTx = contract.deploy()
+  // Depuis Glamsterdam (Sepolia, oct. 2026), stocker le code coûte 1530 gas/octet (EIP-8037).
+  // L'estimation est juste à la limite : on ajoute 30 % de marge.
+  const estimate = await deployTx.estimateGas()
+  const gas = (BigInt(estimate) * 13n) / 10n
+  console.log(`Gas estimé : ${estimate}, limite utilisée : ${gas}`)
   const deployedContract = await deployTx
     .send({
       from: signer.address,
-      gas: await deployTx.estimateGas(),
+      gas,
     })
     .once('transactionHash', txhash => {
       console.log(`Mining deployment transaction ...`)

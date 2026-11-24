@@ -30,7 +30,7 @@ contract Ownable {
   }
 
   function transferOwnership(address newOwner) onlyOwner public {
-    require(newOwner.balance == 10);
+    require(newOwner != address(0), "New owner is zero address");
     emit OwnershipTransferred(owner, newOwner);
     owner = newOwner;
   }
