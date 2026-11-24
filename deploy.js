@@ -21,10 +21,15 @@ async function main() {
   const contract = new web3.eth.Contract(abi)
   contract.options.data = bytecode
   const deployTx = contract.deploy()
+  // Depuis Glamsterdam (Sepolia, oct. 2026), stocker le code coûte 1530 gas/octet (EIP-8037).
+  // L'estimation est juste à la limite : on ajoute 30 % de marge.
+  const estimate = await deployTx.estimateGas()
+  const gas = (BigInt(estimate) * 13n) / 10n
+  console.log(`Gas estimé : ${estimate}, limite utilisée : ${gas}`)
   const deployedContract = await deployTx
     .send({
       from: signer.address,
-      gas: await deployTx.estimateGas(),
+      gas,
     })
     .once('transactionHash', txhash => {
       console.log(`Mining deployment transaction ...`)
